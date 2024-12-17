@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:logger/logger.dart';
 
 void main() {
   runApp(const MyApp());
@@ -28,70 +29,49 @@ class PhotoSorter extends StatefulWidget {
 }
 
 class _PhotoSorterState extends State<PhotoSorter> {
+  final Logger _logger = Logger();
   List<File> images = [];
   int currentIndex = 0;
-  String sourceDirectory = '';
   String selectedDestination = '';
 
-  // Ajout de la fonction _requestPermissions
+  // Demande des permissions
   Future<void> _requestPermissions() async {
-    if (await Permission.storage.isGranted) {
-      print("Permission accordée.");
-    } else if (await Permission.manageExternalStorage.isGranted) {
-      print("Permission accordée pour MANAGE_EXTERNAL_STORAGE.");
-    } else {
+    if (!await Permission.storage.isGranted) {
       var status = await Permission.storage.request();
-      if (status.isGranted) {
-        print("Permission accordée.");
-      } else if (status.isPermanentlyDenied) {
-        print("Permission refusée de façon permanente.");
-        openAppSettings(); // Ouvre les paramètres pour activer manuellement les permissions
-      } else {
-        print("Permission refusée.");
+      if (!status.isGranted) {
+        _logger.w("Permissions refusées.");
+        openAppSettings(); // Ouvrir les paramètres pour activer les permissions
       }
     }
   }
 
-  // Fonction pour choisir un dossier source et charger les images
-  Future<void> _pickSourceFolder() async {
-    await _requestPermissions(); // Demander les permissions avant de continuer
+  // Sélectionner des fichiers images
+  Future<void> _pickImages() async {
+    await _requestPermissions(); // Demander les permissions
 
-    String? pickedDir = await FilePicker.platform.getDirectoryPath();
-    if (pickedDir != null) {
-      final dir = Directory(pickedDir);
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['jpg', 'jpeg', 'png'], // Filtre pour les images
+      allowMultiple: true, // Autoriser la sélection de plusieurs fichiers
+    );
 
-      // Liste et filtre les fichiers image
-      final files = dir.listSync().whereType<File>().where((file) {
-        final ext = file.path
-            .split('.')
-            .last
-            .toLowerCase(); // Extensions insensibles à la casse
-        return ['jpg', 'jpeg', 'png'].contains(ext);
-      }).toList();
+    if (result != null) {
+      List<File> selectedFiles =
+          result.paths.map((path) => File(path!)).toList();
 
-      // Logs pour déboguer les fichiers détectés
-      print("Chemin du dossier source : $pickedDir");
-      print("Tous les fichiers dans le dossier :");
-      dir.listSync().forEach((entity) {
-        print(entity.path);
+      setState(() {
+        images = selectedFiles;
+        currentIndex = 0;
       });
 
-      if (files.isNotEmpty) {
-        setState(() {
-          sourceDirectory = pickedDir;
-          images = files;
-          currentIndex = 0;
-        });
-        _showAlert(
-            context, "Dossier chargé", "${files.length} images trouvées.");
-      } else {
-        _showAlert(
-            context, "Aucune image", "Aucune image trouvée dans ce dossier.");
-      }
+      _showAlert(
+          context, "Images chargées", "${images.length} images trouvées.");
+    } else {
+      _showAlert(context, "Aucune sélection", "Aucune image sélectionnée.");
     }
   }
 
-  // Fonction pour choisir ou créer un dossier cible
+  // Choisir un dossier cible
   Future<void> _pickDestinationFolder() async {
     String? pickedDir = await FilePicker.platform.getDirectoryPath();
     if (pickedDir != null) {
@@ -99,11 +79,11 @@ class _PhotoSorterState extends State<PhotoSorter> {
         selectedDestination = pickedDir;
       });
       _showAlert(context, "Dossier cible sélectionné",
-          "Images seront déplacées vers $pickedDir.");
+          "Les images seront déplacées vers $pickedDir.");
     }
   }
 
-  // Déplace une image vers le dossier cible
+  // Déplacer une image
   Future<void> _moveImage(File image) async {
     if (selectedDestination.isEmpty) {
       _showAlert(context, "Erreur", "Aucun dossier cible sélectionné.");
@@ -111,44 +91,33 @@ class _PhotoSorterState extends State<PhotoSorter> {
     }
 
     try {
-      final targetDir = Directory(selectedDestination);
-      if (!await targetDir.exists()) {
-        await targetDir.create();
-      }
-
-      final newPath = '${targetDir.path}/${image.uri.pathSegments.last}';
+      final newPath = '$selectedDestination/${image.uri.pathSegments.last}';
       await image.rename(newPath);
       setState(() {
         images.removeAt(currentIndex);
-        if (currentIndex >= images.length) {
-          currentIndex = images.isEmpty ? 0 : images.length - 1;
-        }
+        currentIndex = currentIndex >= images.length ? 0 : currentIndex;
       });
-      _showAlert(context, "Image déplacée",
-          "Image déplacée vers $selectedDestination.");
+      _showAlert(context, "Image déplacée", "Image déplacée avec succès.");
     } catch (e) {
       _showAlert(context, "Erreur", "Impossible de déplacer l'image : $e");
     }
   }
 
-  // Supprime une image
+  // Supprimer une image
   Future<void> _deleteImage(File image) async {
     try {
       await image.delete();
       setState(() {
         images.removeAt(currentIndex);
-        if (currentIndex >= images.length) {
-          currentIndex = images.isEmpty ? 0 : images.length - 1;
-        }
+        currentIndex = currentIndex >= images.length ? 0 : currentIndex;
       });
-      _showAlert(
-          context, "Image supprimée", "L'image a été supprimée avec succès.");
+      _showAlert(context, "Image supprimée", "L'image a été supprimée.");
     } catch (e) {
       _showAlert(context, "Erreur", "Impossible de supprimer l'image : $e");
     }
   }
 
-  // Affiche une alerte contextuelle
+  // Afficher une alerte
   void _showAlert(BuildContext context, String title, String content) {
     showDialog(
       context: context,
@@ -183,7 +152,8 @@ class _PhotoSorterState extends State<PhotoSorter> {
                   if (details.primaryVelocity! > 0) {
                     // Swipe droit : Ignorer l'image
                     setState(() {
-                      currentIndex = (currentIndex + 1) % images.length;
+                      currentIndex = (currentIndex + 1) %
+                          images.length; // Passer à l'image suivante
                     });
                   } else if (details.primaryVelocity! < 0) {
                     // Swipe gauche : Déplacer l'image
@@ -196,20 +166,25 @@ class _PhotoSorterState extends State<PhotoSorter> {
                     _deleteImage(images[currentIndex]);
                   }
                 },
-                child: Image.file(images[currentIndex]),
+                child: Image.file(
+                  images[currentIndex],
+                  fit: BoxFit.contain,
+                  width: double.infinity,
+                  height: double.infinity,
+                ),
               ),
             ),
       floatingActionButton: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
           FloatingActionButton.extended(
-            onPressed: _pickSourceFolder,
-            label: const Text("Source"),
-            icon: const Icon(Icons.folder),
+            onPressed: _pickImages,
+            label: const Text("Charger Images"),
+            icon: const Icon(Icons.photo_library),
           ),
           FloatingActionButton.extended(
             onPressed: _pickDestinationFolder,
-            label: const Text("Cible"),
+            label: const Text("Dossier Cible"),
             icon: const Icon(Icons.create_new_folder),
           ),
         ],
